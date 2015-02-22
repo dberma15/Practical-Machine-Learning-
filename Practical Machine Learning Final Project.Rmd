@@ -1,0 +1,171 @@
+---
+title: "Practical Machine Learning Final Project"
+author: "Daniel Berman"
+date: "Saturday, February 21, 2015"
+output: html_document
+---
+
+Final Project for Practical Machine Learning Coursera Course
+==============================================================
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+
+Data Source
+============
+The training data for this project are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project comes from this original source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+The code presented in this document assumes the user has already downloaded and saved the data without changing the file names. The user must change the main directory such that the files are there. If the user has changed the file names, it must be reflected in the code.
+
+Goal
+======
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+1.  Your submission should consist of a link to a Github repo with your R markdown and compiled HTML file describing your analysis. Please constrain the text of the writeup to < 2000 words and the number of figures to be less than 5. It will make it easier for the graders if you submit a repo with a gh-pages branch so the HTML page can be viewed online (and you always want to make it easy on graders :-).
+2.	You should also apply your machine learning algorithm to the 20 test cases available in the test data above. Please submit your predictions in appropriate format to the programming assignment for automated grading. See the programming assignment for additional details.
+
+Required Packages
+====================
+This code was written in R and requires the use of a number of packages. These can be installed using install.packages(""). The following packages were loaded: caret, rpart, rpart.plot, rattle, and randomForest.
+
+ANALYSIS
+============
+Preparation
+------------
+The analysis of this data begins by loading the relevant files into R and setting a seed to ensure reproducibility: 
+```{r, warning=FALSE}
+setwd('C:/Users/daniel/Documents/R')
+pml.data<-read.csv('pml-training.csv')
+pml.validation<-read.csv('pml-testing.csv')
+
+library(caret);
+library(rpart);
+library(rpart.plot);
+library(rattle);
+library(randomForest);
+set.seed(25841)
+```
+There are two sets of data, a training set and a test set. However, we will use the test set for validation and partition the training set into two parts, a training and a test set. Using createDataPartition, 60% of the data is used for the training set and 40% is used for the test set.
+```{r}
+inTrain<-createDataPartition(y=pml.data$classe, p=.6, list=FALSE)
+pml.training<-pml.data[inTrain,]
+pml.test<-pml.data[-inTrain,]
+```
+Preprocessing 
+------------
+There were three primary steps performed in preprocessing the data. The first was removing columns that were indexing or labeling in nature, containing no meaningful data. These were the first five columns containing an indexing variable, a variable that indicates the name of the subject, and three time stamp variables. 
+```{r}
+#CLEANING STEP 1: Remove the first five column since they contain useless information
+labelingColumns<-c(1:7) #these include names of individuals, time stamps and indexing.
+pml.training<-pml.training[,-labelingColumns]
+```
+The second step is to remove columns that contain near zero variance. The reason for doing this is that these variables contain no useful information. This is achieved by using the nearZeroVar() function in the caret package. 
+```{r}
+  #CLEANING STEP 2: Remove all the NZV variables using nearZeroVar to remove all variables
+  #with very low variance
+  pml.trainingNZV<-nearZeroVar(pml.training, saveMetrics=TRUE)
+  pml.trainingNoNZV<-pml.training[,!pml.trainingNZV$nzv]
+```
+The third step is to remove variables that contain a significant number of NA (not available) entries, indicating that no data was recorded. These are removed because any entries that contain data might provide information for modeling, but are less useful in prediction because while some entries may contain information, the high portion of NAs would make it a poor predictor. The threshold for elimination was more than 60% of entries in a variable being NA.
+```{r}
+  #CLEANING STEP 3: Remove columns with more than 60% NA as these likely do not contain
+  #useful information
+  isNA.pml.trainingNoNZV<-is.na(pml.trainingNoNZV)
+  dataNumber<-dim(pml.trainingNoNZV)[1]
+  percentNA<-colSums(isNA.pml.trainingNoNZV)/dataNumber
+  notNArows<-percentNA<.6
+  pml.trainingNoNZV.NoNA<-pml.trainingNoNZV[,notNArows]
+```
+The fourth step involves using Principal Component Analysis to remove the highly correlated variables. This was done using the preProcess() function in Caret.
+```{r}
+  #CLEANING STEP 4: This step uses PCA to remove correlated columns
+  preProc<-preProcess(pml.trainingNoNZV.NoNA[,-53], method="pca")
+  trainingPreProc<-predict(preProc,pml.trainingNoNZV.NoNA[,-53])
+  trainingPreProc$classe<-pml.trainingNoNZV.NoNA$classe
+```
+
+The preprocessing of the test and validation data eliminates the same variables:
+```{r}
+#Perform these cleaning steps on the test set and the validation set.
+pml.test<-pml.test[,-labelingColumns]
+pml.testNoNZV<-pml.test[,!pml.trainingNZV$nzv]
+pml.testNoNZV.NoNA<-pml.testNoNZV[,notNArows]
+testPreProc<-predict(preProc,pml.testNoNZV.NoNA[,-53])
+testPreProc$classe<-pml.testNoNZV.NoNA$classe
+
+pml.validation<-pml.validation[,-labelingColumns]
+pml.validationNoNZV<-pml.validation[,!pml.trainingNZV$nzv]
+pml.validationNoNZV.NoNA<-pml.validationNoNZV[,notNArows]
+validationPreProc<-predict(preProc,pml.validationNoNZV.NoNA[,-53])
+validationPreProc[,(length(validationPreProc)+1)]<-pml.validationNoNZV.NoNA[,53]
+```
+
+Building the Model
+------------------
+To find the best method for classifying behavior, three different models were created. The first method creates decision trees using rpart. 
+```{r}
+  #model 1: uses rpart to create a decision tree 
+  modelFit<-rpart(classe~., data=trainingPreProc, method="class") #
+```
+This was used to make predictions about both training data and the test data, with the results generated using the confusionMatrix() function. The results for the training and test data are as follows:
+
+```{r}
+predictions.training<-predict(modelFit, trainingPreProc, type="class")
+confusionMatrix.rpart.training<-confusionMatrix(predictions.training, trainingPreProc$classe)
+confusionMatrix.rpart.training$overall
+
+
+predictions.test<-predict(modelFit, testPreProc, type="class")
+confusionMatrix.rpart.test<-confusionMatrix.rpart.test<-confusionMatrix(predictions.test,
+                                                                        testPreProc$classe)
+confusionMatrix.rpart.test$overall
+ ```
+As expected, the test set is only slightly less accurate than the training set, making it somewhat generalizable. However, given that the training set had an accuracy of 51.46%, compared to the test set, which had an accuracy of 48.1%, the model does not predict the class very well.
+The second and third models use the random forest method. The difference between them is that the second model uses the data from the PCA preprocessing and the third model uses the data before it was preprocessed using PCA.
+```{r}
+#model 2: uses random forest to create decision trees
+  modelFit2<-randomForest(formula=classe~., data=trainingPreProc) 
+  modelFit3<-randomForest(formula=classe~., data=pml.trainingNoNZV.NoNA)
+```
+As before, the results of this model for the training and test sets are shown using the confusionMatrix() function:
+```{r}
+#Model #2 (PCA)
+predictionsRF.training<-predict(modelFit2, trainingPreProc, type="class")
+confusionMatrix.RF.training<-confusionMatrix(predictionsRF.training,
+                                             trainingPreProc$classe)
+confusionMatrix.RF.training
+
+predictionsRF.test<-predict(modelFit2, testPreProc, type="class")
+confusionMatrix.RF.test<-confusionMatrix(predictionsRF.test, testPreProc$classe) 
+confusionMatrix.RF.test
+
+
+#Model #3 (no PCA)
+predictionsRF.training3<-predict(modelFit3, pml.trainingNoNZV.NoNA, type="class")
+confusionMatrix.RF.training3<-confusionMatrix(predictionsRF.training3,
+                                              pml.trainingNoNZV.NoNA$classe)
+confusionMatrix.RF.training3
+
+predictionsRF.test3<-predict(modelFit3, pml.testNoNZV.NoNA, type="class")
+confusionMatrix.RF.test3<-confusionMatrix(predictionsRF.test3,
+                                          pml.testNoNZV.NoNA$classe) 
+confusionMatrix.RF.test3
+```
+Again, the training set predictions are better than the test set predictions for both models two and three. However, the test set predictions are 97.3% accurate for the PCA preprocessed data and 99.45% accurate for the complete data. Therefore, both models are very generalizable, but we will use the complete data set, modelFit3, for making predictions about the validation set, rather than the PCA preprocessed model. 
+
+Predictions
+============
+We can then use the random forest model on the validation data to predict what the possible classes the 20 cases belong to. 
+```{r}
+predictionsRF.validation<-predict(modelFit3, pml.validationNoNZV.NoNA, type="class")
+
+```
+Which returns the results:
+```{r}
+predictionsRF.validation
+
+```
